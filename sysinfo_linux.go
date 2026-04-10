@@ -6,15 +6,40 @@
 
 package excelize
 
-import "golang.org/x/sys/unix"
+import (
+	"bufio"
+	"os"
+	"strconv"
+	"strings"
+)
 
 // availableMemoryBytes returns the available system memory in bytes on Linux
-// using unix.Sysinfo from golang.org/x/sys/unix. Freeram * Unit gives the
-// available physical RAM without spawning a subprocess or parsing /proc.
+// by reading MemAvailable from /proc/meminfo. This is the correct metric for
+// available RAM: unlike MemFree it includes reclaimable page-cache and
+// buffer memory, so it accurately reflects what a new allocation could use.
 func availableMemoryBytes() uint64 {
-	var info unix.Sysinfo_t
-	if err := unix.Sysinfo(&info); err != nil {
+	f, err := os.Open("/proc/meminfo")
+	if err != nil {
 		return autoTuneFallbackMem
 	}
-	return info.Freeram * uint64(info.Unit)
+	defer f.Close()
+
+	sc := bufio.NewScanner(f)
+	for sc.Scan() {
+		line := sc.Text()
+		if !strings.HasPrefix(line, "MemAvailable:") {
+			continue
+		}
+		// Format: "MemAvailable:   12345678 kB"
+		fields := strings.Fields(line)
+		if len(fields) < 2 {
+			break
+		}
+		kb, err := strconv.ParseUint(fields[1], 10, 64)
+		if err != nil {
+			break
+		}
+		return kb * 1024
+	}
+	return autoTuneFallbackMem
 }
