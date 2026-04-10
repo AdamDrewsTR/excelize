@@ -200,6 +200,20 @@ type Options struct {
 	// Note: Non-streaming writes (SetCellValue, SetCellStr) always use shared
 	// strings automatically; this option only affects StreamWriter.
 	UseSharedStrings bool
+	// AutoTune selects a streaming I/O profile that is automatically tuned
+	// to the machine's available memory at runtime. When AutoTune is set,
+	// any StreamingChunkSize, StreamingBufSize, or Compression fields that
+	// are still at their zero value will be filled in by the chosen profile.
+	// Explicitly set fields always take precedence.
+	//
+	// Available profiles:
+	//   AutoTuneMemoryOptimized – minimise RAM; spill to disk early, use
+	//     standard deflate (smallest ZIP output).
+	//   AutoTuneDiskOptimized   – minimise disk I/O; keep data in memory
+	//     as long as possible, use no compression.
+	//   AutoTuneBalanced        – split the workload; moderate chunk size,
+	//     best-speed compression.
+	AutoTune AutoTuneProfile
 }
 
 // OpenFile take the name of a spreadsheet file and returns a populated

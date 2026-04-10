@@ -1,0 +1,166 @@
+// Copyright 2016 - 2026 The excelize Authors. All rights reserved. Use of
+// this source code is governed by a BSD-style license that can be found in
+// the LICENSE file.
+
+package excelize
+
+// AutoTuneProfile is implemented by each streaming-profile type. Its tune
+// method receives the machine's currently available memory (in bytes) and
+// returns recommended streaming I/O settings. Fields already set to non-zero
+// values in Options are never overridden, so profiles can be mixed with
+// explicit overrides.
+//
+// The four built-in profiles are AutoTuneNone, AutoTuneMemoryOptimized,
+// AutoTuneDiskOptimized, and AutoTuneBalanced. The zero value of
+// Options.AutoTune (nil) behaves identically to AutoTuneNone.
+type AutoTuneProfile interface {
+	tune(availMem int) autoTuneSettings
+}
+
+// autoTuneSettings holds the streaming I/O parameters resolved by a profile.
+// A zero value for any field means "leave the option unchanged".
+type autoTuneSettings struct {
+	chunkSize   int
+	bufSize     int
+	compression Compression
+}
+
+// --- concrete profile types -------------------------------------------------
+
+type (
+	autoTuneNoneProfile     struct{}
+	autoTuneMemoryProfile   struct{}
+	autoTuneDiskProfile     struct{}
+	autoTuneBalancedProfile struct{}
+)
+
+func (autoTuneNoneProfile) tune(_ int) autoTuneSettings { return autoTuneSettings{} }
+
+// AutoTuneMemoryOptimized minimises peak heap usage by spilling XML data to a
+// temp file early and using standard deflate compression (which produces the
+// smallest ZIP output and therefore the least data traversing the output
+// pipeline).
+//
+// Streaming thresholds are derived from available memory:
+//
+//	ChunkSize   = clamp(availMem/32, 1 MiB, 4 MiB)
+//	BufSize     = 32 KiB
+//	Compression = CompressionDefault
+func (autoTuneMemoryProfile) tune(availMem int) autoTuneSettings {
+	return autoTuneSettings{
+		chunkSize: clampInt(availMem/32, autoTuneMinChunk, 4<<20),
+		bufSize:   autoTuneMinBuf,
+		// CompressionDefault == 0; leaving compression zero means "no change".
+	}
+}
+
+// AutoTuneDiskOptimized minimises disk I/O by keeping XML data in memory as
+// long as possible and writing large batches when the threshold is eventually
+// crossed. Disabling ZIP compression further reduces write amplification.
+//
+// Streaming thresholds are derived from available memory:
+//
+//	ChunkSize   = -1 (never spill) when availMem >= 2 GiB,
+//	              otherwise clamp(availMem/2, 64 MiB, 512 MiB)
+//	BufSize     = clamp(availMem/1000, 512 KiB, 4 MiB)
+//	Compression = CompressionNone
+func (autoTuneDiskProfile) tune(availMem int) autoTuneSettings {
+	chunk := clampInt(availMem/2, 64<<20, autoTuneMaxChunk)
+	const twoGiB = 2 << 30
+	if availMem >= twoGiB {
+		chunk = -1 // never spill to disk
+	}
+	return autoTuneSettings{
+		chunkSize:   chunk,
+		bufSize:     clampInt(availMem/1000, 512<<10, autoTuneMaxBuf),
+		compression: CompressionNone,
+	}
+}
+
+// AutoTuneBalanced splits the workload evenly: moderate chunk size, 256 KiB
+// write buffer, and best-speed compression.
+//
+// Streaming thresholds are derived from available memory:
+//
+//	ChunkSize   = clamp(availMem/8, 16 MiB, 64 MiB)
+//	BufSize     = 256 KiB
+//	Compression = CompressionBestSpeed
+func (autoTuneBalancedProfile) tune(availMem int) autoTuneSettings {
+	return autoTuneSettings{
+		chunkSize:   clampInt(availMem/8, 16<<20, 64<<20),
+		bufSize:     256 << 10,
+		compression: CompressionBestSpeed,
+	}
+}
+
+// --- exported profile singletons --------------------------------------------
+
+var (
+	// AutoTuneNone disables auto-tuning (the default). StreamingChunkSize,
+	// StreamingBufSize, and Compression are used as-is.
+	AutoTuneNone AutoTuneProfile = autoTuneNoneProfile{}
+
+	// AutoTuneMemoryOptimized minimises peak heap usage. See
+	// autoTuneMemoryProfile.tune for details.
+	AutoTuneMemoryOptimized AutoTuneProfile = autoTuneMemoryProfile{}
+
+	// AutoTuneDiskOptimized minimises disk I/O. See autoTuneDiskProfile.tune
+	// for details.
+	AutoTuneDiskOptimized AutoTuneProfile = autoTuneDiskProfile{}
+
+	// AutoTuneBalanced splits the workload evenly. See
+	// autoTuneBalancedProfile.tune for details.
+	AutoTuneBalanced AutoTuneProfile = autoTuneBalancedProfile{}
+)
+
+const (
+	// autoTuneFallbackMem is the assumed available memory when the OS query
+	// fails. 4 GiB is a conservative but reasonable modern baseline.
+	autoTuneFallbackMem = 4 << 30 // 4 GiB
+
+	autoTuneMinChunk = 1 << 20   // 1 MiB
+	autoTuneMaxChunk = 512 << 20 // 512 MiB
+
+	autoTuneMinBuf = 32 << 10 // 32 KiB
+	autoTuneMaxBuf = 4 << 20  // 4 MiB
+)
+
+// clampInt returns v clamped to [lo, hi].
+func clampInt(v, lo, hi int) int {
+	if v < lo {
+		return lo
+	}
+	if v > hi {
+		return hi
+	}
+	return v
+}
+
+// applyAutoTune fills in zero-value streaming fields of opts by delegating to
+// the AutoTune profile's tune method. Fields already set by the caller are
+// never modified.
+//
+// applyAutoTune is idempotent: calling it a second time is safe because the
+// fields are no longer zero after the first call.
+func applyAutoTune(opts *Options) {
+	if opts == nil || opts.AutoTune == nil {
+		return
+	}
+
+	availMem := int(availableMemoryBytes())
+	// Guard against overflow when availMem is very large (>= max int on 32-bit).
+	if availMem <= 0 {
+		availMem = int(autoTuneFallbackMem)
+	}
+
+	s := opts.AutoTune.tune(availMem)
+	if opts.StreamingChunkSize == 0 && s.chunkSize != 0 {
+		opts.StreamingChunkSize = s.chunkSize
+	}
+	if opts.StreamingBufSize == 0 && s.bufSize != 0 {
+		opts.StreamingBufSize = s.bufSize
+	}
+	if opts.Compression == CompressionDefault && s.compression != CompressionDefault {
+		opts.Compression = s.compression
+	}
+}
