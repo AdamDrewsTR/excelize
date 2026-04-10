@@ -14,14 +14,14 @@ package excelize
 // AutoTuneDiskOptimized, and AutoTuneBalanced. The zero value of
 // Options.AutoTune (nil) behaves identically to AutoTuneNone.
 type AutoTuneProfile interface {
-	tune(availMem int) autoTuneSettings
+	Tune(availMem int64) autoTuneSettings
 }
 
 // autoTuneSettings holds the streaming I/O parameters resolved by a profile.
 // A zero value for any field means "leave the option unchanged".
 type autoTuneSettings struct {
-	chunkSize   int
-	bufSize     int
+	chunkSize   int64
+	bufSize     int64
 	compression Compression
 }
 
@@ -34,7 +34,7 @@ type (
 	autoTuneBalancedProfile struct{}
 )
 
-func (autoTuneNoneProfile) tune(_ int) autoTuneSettings { return autoTuneSettings{} }
+func (autoTuneNoneProfile) Tune(_ int64) autoTuneSettings { return autoTuneSettings{} }
 
 // AutoTuneMemoryOptimized minimises peak heap usage by spilling XML data to a
 // temp file early and using standard deflate compression (which produces the
@@ -46,9 +46,9 @@ func (autoTuneNoneProfile) tune(_ int) autoTuneSettings { return autoTuneSetting
 //	ChunkSize   = clamp(availMem/32, 1 MiB, 4 MiB)
 //	BufSize     = 32 KiB
 //	Compression = CompressionDefault
-func (autoTuneMemoryProfile) tune(availMem int) autoTuneSettings {
+func (autoTuneMemoryProfile) Tune(availMem int64) autoTuneSettings {
 	return autoTuneSettings{
-		chunkSize: clampInt(availMem/32, autoTuneMinChunk, 4<<20),
+		chunkSize: clampUint64(availMem/32, autoTuneMinChunk, 4<<20),
 		bufSize:   autoTuneMinBuf,
 		// CompressionDefault == 0; leaving compression zero means "no change".
 	}
@@ -64,15 +64,15 @@ func (autoTuneMemoryProfile) tune(availMem int) autoTuneSettings {
 //	              otherwise clamp(availMem/2, 64 MiB, 512 MiB)
 //	BufSize     = clamp(availMem/1000, 512 KiB, 4 MiB)
 //	Compression = CompressionNone
-func (autoTuneDiskProfile) tune(availMem int) autoTuneSettings {
-	chunk := clampInt(availMem/2, 64<<20, autoTuneMaxChunk)
+func (autoTuneDiskProfile) Tune(availMem int64) autoTuneSettings {
+	chunk := clampUint64(availMem/2, 64<<20, autoTuneMaxChunk)
 	const twoGiB = 2 << 30
 	if availMem >= twoGiB {
 		chunk = -1 // never spill to disk
 	}
 	return autoTuneSettings{
 		chunkSize:   chunk,
-		bufSize:     clampInt(availMem/1000, 512<<10, autoTuneMaxBuf),
+		bufSize:     clampUint64(availMem/1000, 512<<10, autoTuneMaxBuf),
 		compression: CompressionNone,
 	}
 }
@@ -85,9 +85,9 @@ func (autoTuneDiskProfile) tune(availMem int) autoTuneSettings {
 //	ChunkSize   = clamp(availMem/8, 16 MiB, 64 MiB)
 //	BufSize     = 256 KiB
 //	Compression = CompressionBestSpeed
-func (autoTuneBalancedProfile) tune(availMem int) autoTuneSettings {
+func (autoTuneBalancedProfile) Tune(availMem int64) autoTuneSettings {
 	return autoTuneSettings{
-		chunkSize:   clampInt(availMem/8, 16<<20, 64<<20),
+		chunkSize:   clampUint64(availMem/8, 16<<20, 64<<20),
 		bufSize:     256 << 10,
 		compression: CompressionBestSpeed,
 	}
@@ -116,17 +116,17 @@ var (
 const (
 	// autoTuneFallbackMem is the assumed available memory when the OS query
 	// fails. 4 GiB is a conservative but reasonable modern baseline.
-	autoTuneFallbackMem = 4 << 30 // 4 GiB
+	autoTuneFallbackMem int64 = 4 << 30 // 4 GiB
 
-	autoTuneMinChunk = 1 << 20   // 1 MiB
-	autoTuneMaxChunk = 512 << 20 // 512 MiB
+	autoTuneMinChunk int64 = 1 << 20   // 1 MiB
+	autoTuneMaxChunk int64 = 512 << 20 // 512 MiB
 
-	autoTuneMinBuf = 32 << 10 // 32 KiB
-	autoTuneMaxBuf = 4 << 20  // 4 MiB
+	autoTuneMinBuf int64 = 32 << 10 // 32 KiB
+	autoTuneMaxBuf int64 = 4 << 20  // 4 MiB
 )
 
-// clampInt returns v clamped to [lo, hi].
-func clampInt(v, lo, hi int) int {
+// clampUInt64 returns v clamped to [lo, hi].
+func clampUint64(v, lo, hi int64) int64 {
 	if v < lo {
 		return lo
 	}
@@ -147,18 +147,18 @@ func applyAutoTune(opts *Options) {
 		return
 	}
 
-	availMem := int(availableMemoryBytes())
+	availMem := availableMemoryBytes()
 	// Guard against overflow when availMem is very large (>= max int on 32-bit).
 	if availMem <= 0 {
-		availMem = int(autoTuneFallbackMem)
+		availMem = autoTuneFallbackMem
 	}
 
-	s := opts.AutoTune.tune(availMem)
+	s := opts.AutoTune.Tune(availMem)
 	if opts.StreamingChunkSize == 0 && s.chunkSize != 0 {
-		opts.StreamingChunkSize = s.chunkSize
+		opts.StreamingChunkSize = int(s.chunkSize)
 	}
 	if opts.StreamingBufSize == 0 && s.bufSize != 0 {
-		opts.StreamingBufSize = s.bufSize
+		opts.StreamingBufSize = int(s.bufSize)
 	}
 	if opts.Compression == CompressionDefault && s.compression != CompressionDefault {
 		opts.Compression = s.compression

@@ -8,4 +8,4 @@ package excelize
 
 // availableMemoryBytes returns the fallback memory estimate on platforms
 // where we have no OS-level memory API available.
-func availableMemoryBytes() uint64 { return autoTuneFallbackMem }
+func availableMemoryBytes() int64 { return autoTuneFallbackMem }

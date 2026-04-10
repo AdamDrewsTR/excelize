@@ -22,8 +22,8 @@ var mibHWMemsize = [2]int32{6, 24}
 // macOS by calling sysctl(hw.memsize) via syscall.Syscall6. It reads the
 // total physical RAM and assumes 60 % is currently available as a
 // conservative baseline for tuning streaming I/O buffers.
-func availableMemoryBytes() uint64 {
-	var total uint64
+func availableMemoryBytes() int64 {
+	var total int64
 	size := uintptr(unsafe.Sizeof(total))
 	_, _, errno := syscall.Syscall6(
 		syscall.SYS___SYSCTL,

@@ -31,12 +31,12 @@ var (
 
 // availableMemoryBytes returns the available physical memory in bytes on
 // Windows by calling GlobalMemoryStatusEx from kernel32.dll.
-func availableMemoryBytes() uint64 {
+func availableMemoryBytes() int64 {
 	var ms memoryStatusEx
 	ms.dwLength = uint32(unsafe.Sizeof(ms))
 	ret, _, _ := procGlobalMemStatusEx.Call(uintptr(unsafe.Pointer(&ms)))
 	if ret == 0 {
 		return autoTuneFallbackMem
 	}
-	return ms.ullAvailPhys
+	return int64(ms.ullAvailPhys)
 }

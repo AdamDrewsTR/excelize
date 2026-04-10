@@ -34,9 +34,9 @@ func TestAutoTuneMemoryOptimized(t *testing.T) {
 
 	assert.Greater(t, opts.StreamingChunkSize, 0, "chunk size must be positive")
 	assert.LessOrEqual(t, opts.StreamingChunkSize, 4<<20, "chunk size must be ≤ 4 MiB")
-	assert.GreaterOrEqual(t, opts.StreamingChunkSize, autoTuneMinChunk, "chunk size must be ≥ 1 MiB")
+	assert.GreaterOrEqual(t, opts.StreamingChunkSize, int(autoTuneMinChunk), "chunk size must be ≥ 1 MiB")
 
-	assert.Equal(t, autoTuneMinBuf, opts.StreamingBufSize, "buf size must be 32 KiB")
+	assert.Equal(t, int(autoTuneMinBuf), opts.StreamingBufSize, "buf size must be 32 KiB")
 	assert.Equal(t, CompressionDefault, opts.Compression, "compression must remain Default")
 }
 
@@ -66,7 +66,7 @@ func TestAutoTuneDiskOptimized(t *testing.T) {
 		"disk-optimised chunk must be -1 or ≥ 64 MiB, got %d", opts.StreamingChunkSize)
 
 	assert.GreaterOrEqual(t, opts.StreamingBufSize, 512<<10, "buf size must be ≥ 512 KiB")
-	assert.LessOrEqual(t, opts.StreamingBufSize, autoTuneMaxBuf, "buf size must be ≤ 4 MiB")
+	assert.LessOrEqual(t, opts.StreamingBufSize, int(autoTuneMaxBuf), "buf size must be ≤ 4 MiB")
 
 	assert.Equal(t, CompressionNone, opts.Compression, "disk-optimised must use CompressionNone")
 }
@@ -163,7 +163,7 @@ func autoTuneEndToEnd(t *testing.T, profile AutoTuneProfile) {
 // a plausible positive value.
 func TestAvailableMemoryBytes(t *testing.T) {
 	mem := availableMemoryBytes()
-	assert.Greater(t, mem, uint64(0), "available memory must be positive")
+	assert.Greater(t, mem, int64(0), "available memory must be positive")
 	// Any reasonable machine has at least 256 MiB
-	assert.GreaterOrEqual(t, mem, uint64(256<<20), "expected at least 256 MiB available")
+	assert.GreaterOrEqual(t, mem, int64(256<<20), "expected at least 256 MiB available")
 }

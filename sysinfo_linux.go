@@ -17,7 +17,7 @@ import (
 // by reading MemAvailable from /proc/meminfo. This is the correct metric for
 // available RAM: unlike MemFree it includes reclaimable page-cache and
 // buffer memory, so it accurately reflects what a new allocation could use.
-func availableMemoryBytes() uint64 {
+func availableMemoryBytes() int64 {
 	f, err := os.Open("/proc/meminfo")
 	if err != nil {
 		return autoTuneFallbackMem
@@ -35,7 +35,7 @@ func availableMemoryBytes() uint64 {
 		if len(fields) < 2 {
 			break
 		}
-		kb, err := strconv.ParseUint(fields[1], 10, 64)
+		kb, err := strconv.ParseInt(fields[1], 10, 64)
 		if err != nil {
 			break
 		}
