@@ -15,16 +15,16 @@ import (
 var mibHWMemsize = [2]int32{6, 24}
 
 // availableMemoryBytes returns an estimate of available system memory on
-// macOS. It reads total physical RAM via sysctl(hw.memsize) and then sums
-// vm.page_free_count and vm.page_speculative_count — two per-page counters
-// that are readable without root and reflect current memory pressure. The
-// result is multiplied by hw.pagesize to get bytes.
+// macOS. It reads total physical RAM via sysctl(hw.memsize) and then reads
+// kern.memorystatus_level, which is macOS's built-in 0-100 memory-availability
+// score. The score already accounts for free, speculative, purgeable, and
+// file-backed pages without requiring root privileges.
 //
-// "Speculative" pages are pre-faulted but immediately reclaimable, so they
-// should be counted as free. This matches what Activity Monitor and vm_stat
-// report as available before compressor/inactive pages are considered.
+// Available memory is estimated as:
 //
-// Falls back to total × 0.6 if any sysctl call fails.
+//	total x memorystatus_level / 100
+//
+// Falls back to total x 0.6 if either sysctl is unavailable.
 func availableMemoryBytes() int64 {
 	// Read total physical RAM.
 	var total uint64
@@ -40,23 +40,14 @@ func availableMemoryBytes() int64 {
 		return autoTuneFallbackMem
 	}
 
-	pageSize, err := syscall.SysctlUint32("hw.pagesize")
-	if err != nil || pageSize == 0 {
-		pageSize = 4096
-	}
-
-	freePages, err := syscall.SysctlUint32("vm.page_free_count")
-	if err != nil {
+	// kern.memorystatus_level is a 0-100 score maintained by the jetsam
+	// subsystem. 100 means no pressure; values near 0 indicate the kernel is
+	// about to start killing processes to reclaim memory.
+	level, err := syscall.SysctlUint32("kern.memorystatus_level")
+	if err != nil || level == 0 || level > 100 {
+		// Sysctl unavailable or value out of range; use a conservative default.
 		return int64(total * 6 / 10)
 	}
-	specPages, err := syscall.SysctlUint32("vm.page_speculative_count")
-	if err != nil {
-		specPages = 0 // treat as unavailable, not fatal
-	}
 
-	avail := uint64(freePages+specPages) * uint64(pageSize)
-	if avail == 0 || avail >= total {
-		return int64(total * 6 / 10)
-	}
-	return int64(avail)
+	return int64(total * uint64(level) / 100)
 }
