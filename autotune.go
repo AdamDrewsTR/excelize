@@ -4,6 +4,8 @@
 
 package excelize
 
+import "fmt"
+
 // AutoTuneProfile is implemented by each streaming-profile type. Its tune
 // method receives the machine's currently available memory (in bytes) and
 // returns recommended streaming I/O settings. Fields already set to non-zero
@@ -23,6 +25,22 @@ type autoTuneSettings struct {
 	chunkSize   int64
 	bufSize     int64
 	compression Compression
+}
+
+// String returns a human-readable description of the resolved settings.
+// Intended for debugging and logging only; the format is not stable.
+func (s autoTuneSettings) String() string {
+	chunk := "default"
+	if s.chunkSize < 0 {
+		chunk = "never-spill"
+	} else if s.chunkSize > 0 {
+		chunk = fmt.Sprintf("%d KiB", s.chunkSize>>10)
+	}
+	buf := "default"
+	if s.bufSize > 0 {
+		buf = fmt.Sprintf("%d KiB", s.bufSize>>10)
+	}
+	return fmt.Sprintf("autoTuneSettings{chunkSize:%s bufSize:%s compression:%v}", chunk, buf, s.compression)
 }
 
 // --- concrete profile types -------------------------------------------------

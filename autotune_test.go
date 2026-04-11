@@ -159,6 +159,51 @@ func autoTuneEndToEnd(t *testing.T, profile AutoTuneProfile) {
 	require.NoError(t, f2.Close())
 }
 
+// TestAutoTuneSettingsString verifies the String() method output for all
+// meaningful field combinations. The format is for debugging only, but the
+// cases below document the expected tokens so regressions are caught.
+func TestAutoTuneSettingsString(t *testing.T) {
+	cases := []struct {
+		name     string
+		s        autoTuneSettings
+		wantSubs []string // substrings that must appear in the output
+	}{
+		{
+			name:     "zero value",
+			s:        autoTuneSettings{},
+			wantSubs: []string{"chunkSize:default", "bufSize:default"},
+		},
+		{
+			name:     "never-spill sentinel",
+			s:        autoTuneSettings{chunkSize: -1, bufSize: 4 << 20},
+			wantSubs: []string{"chunkSize:never-spill", "bufSize:4096 KiB"},
+		},
+		{
+			name:     "positive chunk and buf",
+			s:        autoTuneSettings{chunkSize: 16 << 20, bufSize: 256 << 10},
+			wantSubs: []string{"chunkSize:16384 KiB", "bufSize:256 KiB"},
+		},
+		{
+			name:     "compression none",
+			s:        autoTuneSettings{compression: CompressionNone},
+			wantSubs: []string{"compression:"},
+		},
+		{
+			name:     "compression best speed",
+			s:        autoTuneSettings{chunkSize: 1 << 20, bufSize: 32 << 10, compression: CompressionBestSpeed},
+			wantSubs: []string{"chunkSize:1024 KiB", "bufSize:32 KiB"},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := tc.s.String()
+			for _, sub := range tc.wantSubs {
+				assert.Contains(t, got, sub, "String() output %q missing %q", got, sub)
+			}
+		})
+	}
+}
+
 // TestAvailableMemoryBytes sanity-checks that availableMemoryBytes returns
 // a plausible positive value.
 func TestAvailableMemoryBytes(t *testing.T) {
