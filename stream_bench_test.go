@@ -282,6 +282,112 @@ func writeExcelBenchWithOpts(data [][]string, out io.Writer, opts Options) error
 	return err
 }
 
+// benchmarkAutoTuneStream is the streaming-path helper for AutoTune benchmarks.
+// It runs SetRow + Flush + Close only — no WriteTo — so results isolate the
+// effect of chunkSize / bufSize on the write-buffer hot path.
+func benchmarkAutoTuneStream(rows, cols int, profile AutoTuneProfile, b *testing.B) {
+	b.Helper()
+	row := make([]interface{}, cols)
+	for i := range row {
+		row[i] = i * 12345
+	}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for n := 0; n < b.N; n++ {
+		opts := Options{}
+		if profile != nil {
+			opts.AutoTune = profile
+		}
+		file := NewFile(opts)
+		sw, _ := file.NewStreamWriter("Sheet1")
+		for rowID := 1; rowID <= rows; rowID++ {
+			cell, _ := CoordinatesToCellName(1, rowID)
+			_ = sw.SetRow(cell, row)
+		}
+		_ = sw.Flush()
+		_ = file.Close()
+	}
+}
+
+// benchmarkAutoTuneFullPipeline is the full-pipeline helper for AutoTune
+// benchmarks. Data is pre-built outside the timer; only SetRow + WriteTo is
+// measured, consistent with the BenchmarkCompressionLevels methodology.
+func benchmarkAutoTuneFullPipeline(data [][]string, profile AutoTuneProfile, b *testing.B) {
+	b.Helper()
+	b.ReportAllocs()
+	var buf bytes.Buffer
+	b.ResetTimer()
+	for n := 0; n < b.N; n++ {
+		b.StopTimer()
+		buf.Reset()
+		opts := Options{}
+		if profile != nil {
+			opts.AutoTune = profile
+		}
+		b.StartTimer()
+		if err := writeExcelBenchWithOpts(data, &buf, opts); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+// BenchmarkAutoTuneStreamWriter compares the four AutoTune profiles plus an
+// explicit no-tune baseline on the streaming write path (SetRow + Flush +
+// Close, no WriteTo). Data is 50 000 rows × 100 integer columns, matching the
+// BenchmarkStreamWriterHuge dataset in PR #2288.
+//
+// Run with: go test -bench=BenchmarkAutoTuneStreamWriter -benchmem -count=3 -run='^$'
+func BenchmarkAutoTuneStreamWriter(b *testing.B) {
+	profiles := []struct {
+		name    string
+		profile AutoTuneProfile
+	}{
+		{"NoTune", nil},
+		{"MemoryOptimized", AutoTuneMemoryOptimized},
+		{"DiskOptimized", AutoTuneDiskOptimized},
+		{"Balanced", AutoTuneBalanced},
+	}
+	for _, p := range profiles {
+		p := p
+		b.Run(p.name, func(b *testing.B) {
+			benchmarkAutoTuneStream(50000, 100, p.profile, b)
+		})
+	}
+}
+
+// BenchmarkAutoTuneFullPipeline compares the four AutoTune profiles plus an
+// explicit no-tune baseline on the full pipeline: string-data SetRow +
+// WriteTo to a bytes.Buffer. Data is 50 000 rows × 20 string columns,
+// matching the BenchmarkCompressionLevels dataset in PR #2288. This shows the
+// combined effect of chunk/buf tuning and compression selection.
+//
+// Run with: go test -bench=BenchmarkAutoTuneFullPipeline -benchmem -count=3 -run='^$'
+func BenchmarkAutoTuneFullPipeline(b *testing.B) {
+	const rows, cols = 50000, 20
+	data := make([][]string, rows)
+	for x := range data {
+		data[x] = make([]string, cols)
+		for y := range data[x] {
+			data[x][y] = "test value " + strconv.Itoa(x*cols+y)
+		}
+	}
+	profiles := []struct {
+		name    string
+		profile AutoTuneProfile
+	}{
+		{"NoTune", nil},
+		{"MemoryOptimized", AutoTuneMemoryOptimized},
+		{"DiskOptimized", AutoTuneDiskOptimized},
+		{"Balanced", AutoTuneBalanced},
+	}
+	for _, p := range profiles {
+		p := p
+		b.Run(p.name, func(b *testing.B) {
+			benchmarkAutoTuneFullPipeline(data, p.profile, b)
+		})
+	}
+}
+
 func BenchmarkCompressionLevels(b *testing.B) {
 	const rows, cols = 50000, 20
 	data := make([][]string, rows)
