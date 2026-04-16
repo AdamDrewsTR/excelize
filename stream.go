@@ -134,6 +134,9 @@ func (f *File) NewStreamWriter(sheet string) (*StreamWriter, error) {
 	if sheetID == -1 {
 		return nil, ErrSheetNotExist{sheet}
 	}
+	// Auto-tune must run before we read individual streaming fields so that
+	// any zero-value fields are filled in by the chosen profile.
+	applyAutoTune(f.options)
 	chunkSize := f.options.StreamingChunkSize
 	switch {
 	case chunkSize < 0:
