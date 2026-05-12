@@ -76,7 +76,7 @@ func (f *File) SaveAs(name string, opts ...Options) error {
 	if _, ok := supportedContentTypes[strings.ToLower(filepath.Ext(f.Path))]; !ok {
 		return ErrWorkbookFileFormat
 	}
-	file, err := os.OpenFile(filepath.Clean(name), os.O_WRONLY|os.O_TRUNC|os.O_CREATE, os.ModePerm)
+	file, err := os.OpenFile(filepath.Clean(name), os.O_RDWR|os.O_TRUNC|os.O_CREATE, os.ModePerm)
 	if err != nil {
 		return err
 	}
@@ -135,16 +135,40 @@ func (f *File) WriteTo(w io.Writer, opts ...Options) (int64, error) {
 	if f.options != nil && f.options.Password != "" {
 		return f.writeToWithEncryption(w)
 	}
-	// Stream the ZIP directly to w. This avoids holding the full compressed
-	// archive in a bytes.Buffer, which can be 50-200 MB+ for large reports.
-	cw := &countWriter{w: w}
-	zw := f.ZipWriter(cw)
-	f.configureZipCompression(zw)
-	if err := f.writeToZip(zw); err != nil {
-		_ = zw.Close()
-		return cw.n, err
+	// If the writer supports random access (e.g. *os.File from SaveAs),
+	// stream the ZIP directly and apply ZIP64 LFH fixup in place afterward.
+	type randomAccessWriter interface {
+		io.Writer
+		io.ReaderAt
+		io.WriterAt
+		Stat() (os.FileInfo, error)
 	}
-	return cw.n, zw.Close()
+	if rw, ok := w.(randomAccessWriter); ok {
+		cw := &countWriter{w: w}
+		f.zip64Entries = nil
+		zw := f.ZipWriter(cw)
+		f.configureZipCompression(zw)
+		if err := f.writeToZip(zw); err != nil {
+			_ = zw.Close()
+			return cw.n, err
+		}
+		if err := zw.Close(); err != nil {
+			return cw.n, err
+		}
+		if len(f.zip64Entries) > 0 {
+			if err := f.writeZip64LFHRandomAccess(rw); err != nil {
+				return cw.n, err
+			}
+		}
+		return cw.n, nil
+	}
+	// Non-seekable writer: buffer the entire ZIP so we can apply ZIP64
+	// LFH fixup before writing.
+	buf, err := f.WriteToBuffer()
+	if err != nil {
+		return 0, err
+	}
+	return buf.WriteTo(w)
 }
 
 // writeToWithEncryption writes an encrypted file using a temporary file to
@@ -352,6 +376,8 @@ func (f *File) writeZip64LFH(buf *bytes.Buffer) error {
 		}
 		if inStrSlice(f.zip64Entries, string(data[idx+30:idx+30+filenameLen]), true) != -1 {
 			binary.LittleEndian.PutUint16(data[idx+4:idx+6], 45)
+			binary.LittleEndian.PutUint32(data[idx+18:idx+22], 0xFFFFFFFF)
+			binary.LittleEndian.PutUint32(data[idx+22:idx+26], 0xFFFFFFFF)
 		}
 		offset = idx + 1
 	}
@@ -416,9 +442,15 @@ func (f *File) writeZip64LFHFile(file *os.File) error {
 			filename := string(searchBuf[idx+30 : idx+30+filenameLen])
 			if inStrSlice(f.zip64Entries, filename, true) != -1 {
 				// Update version field at offset idx+4
-				versionBuf := make([]byte, 2)
-				binary.LittleEndian.PutUint16(versionBuf, 45)
-				if _, err := file.WriteAt(versionBuf, absoluteIdx+4); err != nil {
+				var patch [10]byte
+				binary.LittleEndian.PutUint16(patch[0:2], 45)
+				if _, err := file.WriteAt(patch[0:2], absoluteIdx+4); err != nil {
+					return err
+				}
+				// Set compressed and uncompressed sizes to 0xFFFFFFFF
+				binary.LittleEndian.PutUint32(patch[0:4], 0xFFFFFFFF)
+				binary.LittleEndian.PutUint32(patch[4:8], 0xFFFFFFFF)
+				if _, err := file.WriteAt(patch[0:8], absoluteIdx+18); err != nil {
 					return err
 				}
 			}
@@ -432,5 +464,73 @@ func (f *File) writeZip64LFHFile(file *os.File) error {
 		}
 	}
 
+	return nil
+}
+
+// writeZip64LFHRandomAccess performs ZIP64 local file header fixup on a
+// random-access writer. This is used by WriteTo when the destination supports
+// ReadAt/WriteAt (e.g. *os.File from SaveAs), allowing the streaming path to
+// still apply the ZIP64 LFH version and size fixup.
+func (f *File) writeZip64LFHRandomAccess(rw interface {
+	io.ReaderAt
+	io.WriterAt
+	Stat() (os.FileInfo, error)
+}) error {
+	if len(f.zip64Entries) == 0 {
+		return nil
+	}
+	info, err := rw.Stat()
+	if err != nil {
+		return err
+	}
+	fileSize := info.Size()
+
+	const chunkSize = 1024 * 1024
+	buf := make([]byte, chunkSize)
+	var offset int64
+	for offset < fileSize {
+		n, err := rw.ReadAt(buf, offset)
+		if err != nil && err != io.EOF {
+			return err
+		}
+		if n == 0 {
+			break
+		}
+		searchBuf := buf[:n]
+		searchOffset := 0
+		for searchOffset < n {
+			idx := bytes.Index(searchBuf[searchOffset:], []byte{0x50, 0x4b, 0x03, 0x04})
+			if idx == -1 {
+				break
+			}
+			idx += searchOffset
+			absoluteIdx := offset + int64(idx)
+			if idx+30 > n {
+				break
+			}
+			filenameLen := int(binary.LittleEndian.Uint16(searchBuf[idx+26 : idx+28]))
+			if idx+30+filenameLen > n {
+				break
+			}
+			filename := string(searchBuf[idx+30 : idx+30+filenameLen])
+			if inStrSlice(f.zip64Entries, filename, true) != -1 {
+				var patch [10]byte
+				binary.LittleEndian.PutUint16(patch[0:2], 45)
+				if _, err := rw.WriteAt(patch[0:2], absoluteIdx+4); err != nil {
+					return err
+				}
+				binary.LittleEndian.PutUint32(patch[0:4], 0xFFFFFFFF)
+				binary.LittleEndian.PutUint32(patch[4:8], 0xFFFFFFFF)
+				if _, err := rw.WriteAt(patch[0:8], absoluteIdx+18); err != nil {
+					return err
+				}
+			}
+			searchOffset = idx + 1
+		}
+		offset += int64(n)
+		if offset < fileSize {
+			offset -= 30
+		}
+	}
 	return nil
 }

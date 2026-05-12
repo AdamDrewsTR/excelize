@@ -26,7 +26,7 @@ import (
 	"strings"
 	"unicode/utf16"
 
-	"github.com/klauspost/compress/zip"
+	"archive/zip"
 )
 
 // ReadZipReader extract spreadsheet with given options.
