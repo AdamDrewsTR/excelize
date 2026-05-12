@@ -15,7 +15,8 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/klauspost/compress/zip"
+	"archive/zip"
+
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )

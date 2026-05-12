@@ -23,8 +23,9 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/klauspost/compress/flate"
-	"github.com/klauspost/compress/zip"
+	"archive/zip"
+	"compress/flate"
+
 	"golang.org/x/net/html/charset"
 )
 
