@@ -25,6 +25,10 @@ import (
 	"time"
 )
 
+// dimensionPlaceholder is a fixed-width placeholder for the dimension element.
+// It uses max possible cell ref (XFD1048576) to ensure any final dimension fits.
+const dimensionPlaceholder = `<dimension ref="A1:XFD1048576"/>`
+
 // StreamWriter defined the type of stream writer.
 type StreamWriter struct {
 	file            *File
@@ -34,6 +38,8 @@ type StreamWriter struct {
 	worksheet       *xlsxWorksheet
 	rawData         bufferedWriter
 	rows            int
+	maxCol          int   // track max column for dimension element
+	dimensionOffset int64 // byte offset of dimension placeholder for update
 	mergeCellsCount int
 	mergeCells      strings.Builder
 	tableParts      string
@@ -155,7 +161,11 @@ func (f *File) NewStreamWriter(sheet string) (*StreamWriter, error) {
 	f.streams[sheetXMLPath] = sw
 
 	_, _ = sw.rawData.WriteString(xml.Header + `<worksheet` + templateNamespaceIDMap)
-	bulkAppendFields(&sw.rawData, sw.worksheet, 3, 4)
+	// Write SheetPr (field 3) only, we handle Dimension separately
+	bulkAppendFields(&sw.rawData, sw.worksheet, 3, 3)
+	// Record offset and write fixed-width dimension placeholder
+	sw.dimensionOffset = sw.rawData.written
+	_, _ = sw.rawData.WriteString(dimensionPlaceholder)
 	return sw, err
 }
 
@@ -411,6 +421,10 @@ func (sw *StreamWriter) SetRow(cell string, values []interface{}, opts ...RowOpt
 		return newStreamSetRowError(row)
 	}
 	sw.rows = row
+	// Track max column for dimension element
+	if endCol := col + len(values) - 1; endCol > sw.maxCol {
+		sw.maxCol = endCol
+	}
 	sw.writeSheetData()
 	options := parseRowOpts(opts...)
 	attrs, err := options.marshalAttrs()
@@ -783,12 +797,36 @@ func (sw *StreamWriter) Flush() error {
 		return err
 	}
 
+	// Update dimension placeholder with actual dimensions
+	if err := sw.updateDimension(); err != nil {
+		return err
+	}
+
 	sheetPath := sw.file.sheetMap[sw.Sheet]
 	sw.file.Sheet.Delete(sheetPath)
 	sw.file.checked.Delete(sheetPath)
 	sw.file.Pkg.Delete(sheetPath)
 
 	return nil
+}
+
+// updateDimension overwrites the dimension placeholder with the actual
+// dimensions computed during streaming.
+func (sw *StreamWriter) updateDimension() error {
+	// Build actual dimension element, padded to match placeholder length
+	var dim string
+	if sw.rows > 0 && sw.maxCol > 0 {
+		maxCell, _ := CoordinatesToCellName(sw.maxCol, sw.rows)
+		dim = fmt.Sprintf(`<dimension ref="A1:%s"/>`, maxCell)
+	} else {
+		dim = `<dimension ref="A1"/>`
+	}
+	// Pad to match placeholder length
+	padded := dim + strings.Repeat(" ", len(dimensionPlaceholder)-len(dim))
+	if len(padded) != len(dimensionPlaceholder) {
+		return fmt.Errorf("dimension length mismatch: got %d, expected %d", len(dim), len(dimensionPlaceholder))
+	}
+	return sw.rawData.WriteAt([]byte(padded), sw.dimensionOffset)
 }
 
 // bulkAppendFields bulk-appends fields in a worksheet by specified field
