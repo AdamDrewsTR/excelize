@@ -347,9 +347,10 @@ func TestNewStreamWriter(t *testing.T) {
 
 func TestStreamMarshalAttrs(t *testing.T) {
 	var r *RowOpts
-	attrs, err := r.marshalAttrs()
-	assert.NoError(t, err)
-	assert.Empty(t, attrs)
+	assert.NoError(t, r.validateRowOpts())
+	var bw bufferedWriter
+	r.marshalAttrs(&bw)
+	assert.Empty(t, bw.buf.String())
 }
 
 func TestStreamSetRow(t *testing.T) {
