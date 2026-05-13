@@ -182,10 +182,7 @@ func (f *File) writeToWithEncryption(w io.Writer) (int64, error) {
 		}
 	}
 
-	if _, err := tmpFile.Seek(0, 0); err != nil {
-		return 0, err
-	}
-	rawZip, err := io.ReadAll(tmpFile)
+	rawZip, err := os.ReadFile(tmpPath)
 	if err != nil {
 		return 0, err
 	}
@@ -368,69 +365,60 @@ func (f *File) writeZip64LFHFile(file *os.File) error {
 	if _, err := file.Seek(0, 0); err != nil {
 		return err
 	}
-	info, err := file.Stat()
-	if err != nil {
-		return err
-	}
-	fileSize := info.Size()
+	return f.fixZip64LFH(file, file)
+}
 
+// fixZip64LFH scans for ZIP local file headers and patches version and size
+// fields for entries in zip64Entries. Reading and writing are done through
+// separate interfaces so that error paths can be exercised in tests.
+func (f *File) fixZip64LFH(r io.ReaderAt, w io.WriterAt) error {
 	const chunkSize = 1024 * 1024 // 1MB chunks
 	buf := make([]byte, chunkSize)
 	var offset int64
 
-	for offset < fileSize {
-		n, err := file.ReadAt(buf, offset)
-		if err != nil && err != io.EOF {
-			return err
+	for {
+		n, readErr := r.ReadAt(buf, offset)
+		if n > 0 {
+			searchBuf := buf[:n]
+			searchOffset := 0
+			for searchOffset < n {
+				idx := bytes.Index(searchBuf[searchOffset:], []byte{0x50, 0x4b, 0x03, 0x04})
+				if idx == -1 {
+					break
+				}
+				idx += searchOffset
+				absoluteIdx := offset + int64(idx)
+
+				if idx+30 > n {
+					break
+				}
+
+				filenameLen := int(binary.LittleEndian.Uint16(searchBuf[idx+26 : idx+28]))
+				if idx+30+filenameLen > n {
+					break
+				}
+
+				filename := string(searchBuf[idx+30 : idx+30+filenameLen])
+				if inStrSlice(f.zip64Entries, filename, true) != -1 {
+					// Patch version to 45 and set sizes to 0xFFFFFFFF in-place
+					binary.LittleEndian.PutUint16(searchBuf[idx+4:idx+6], 45)
+					binary.LittleEndian.PutUint32(searchBuf[idx+18:idx+22], 0xFFFFFFFF)
+					binary.LittleEndian.PutUint32(searchBuf[idx+22:idx+26], 0xFFFFFFFF)
+					if _, err := w.WriteAt(searchBuf[idx:idx+26], absoluteIdx); err != nil {
+						return err
+					}
+				}
+				searchOffset = idx + 1
+			}
 		}
-		if n == 0 {
+
+		if readErr == io.EOF {
 			break
 		}
-
-		searchBuf := buf[:n]
-		searchOffset := 0
-		for searchOffset < n {
-			idx := bytes.Index(searchBuf[searchOffset:], []byte{0x50, 0x4b, 0x03, 0x04})
-			if idx == -1 {
-				break
-			}
-			idx += searchOffset
-			absoluteIdx := offset + int64(idx)
-
-			if idx+30 > n {
-				break
-			}
-
-			filenameLen := int(binary.LittleEndian.Uint16(searchBuf[idx+26 : idx+28]))
-			if idx+30+filenameLen > n {
-				break
-			}
-
-			filename := string(searchBuf[idx+30 : idx+30+filenameLen])
-			if inStrSlice(f.zip64Entries, filename, true) != -1 {
-				// Update version
-				versionBuf := make([]byte, 2)
-				binary.LittleEndian.PutUint16(versionBuf, 45)
-				if _, err := file.WriteAt(versionBuf, absoluteIdx+4); err != nil {
-					return err
-				}
-				// Set compressed and uncompressed sizes to 0xFFFFFFFF
-				sizeBuf := make([]byte, 4)
-				binary.LittleEndian.PutUint32(sizeBuf, 0xFFFFFFFF)
-				if _, err := file.WriteAt(sizeBuf, absoluteIdx+18); err != nil {
-					return err
-				}
-				if _, err := file.WriteAt(sizeBuf, absoluteIdx+22); err != nil {
-					return err
-				}
-			}
-			searchOffset = idx + 1
+		if readErr != nil {
+			return readErr
 		}
-
-		offset += int64(n)
-		if offset < fileSize {
-			offset -= 30
-		}
+		offset += int64(n) - 30
 	}
 
 	return nil
