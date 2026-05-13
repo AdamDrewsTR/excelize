@@ -2575,3 +2575,35 @@ func TestRowsFastPeekError(t *testing.T) {
 		fr2.Close()
 	}
 }
+
+func TestRowsColumnsWithFastSSTLoaded(t *testing.T) {
+	// Exercise the colRefToIndex fast path in rowXMLHandler when fastSSTLoaded=true
+	f := NewFile()
+	defer f.Close()
+	f.SetCellValue("Sheet1", "A1", "hello")
+	f.SetCellValue("Sheet1", "B1", "world")
+	f.SetCellValue("Sheet1", "A2", "foo")
+
+	buf, err := f.WriteToBuffer()
+	require.NoError(t, err)
+
+	f2, err := OpenReader(buf, Options{FastReadMode: true})
+	require.NoError(t, err)
+	defer f2.Close()
+
+	rows, err := f2.Rows("Sheet1")
+	require.NoError(t, err)
+	defer rows.Close()
+
+	// First row — triggers colRefToIndex fast path
+	assert.True(t, rows.Next())
+	cols, err := rows.Columns()
+	assert.NoError(t, err)
+	assert.Equal(t, []string{"hello", "world"}, cols)
+
+	// Second row — exercises numCols pre-allocation
+	assert.True(t, rows.Next())
+	cols, err = rows.Columns()
+	assert.NoError(t, err)
+	assert.Equal(t, []string{"foo"}, cols)
+}

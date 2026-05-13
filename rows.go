@@ -94,6 +94,10 @@ type Rows struct {
 	decoder                 *xml.Decoder
 	token                   xml.Token
 	curRowOpts, seekRowOpts RowOpts
+	// Reusable cell struct to avoid per-cell allocation
+	cellBuf xlsxC
+	// Learned column count for pre-allocation
+	numCols int
 }
 
 // Next will return true if it finds the next row element.
@@ -155,11 +159,18 @@ func (rows *Rows) Columns(opts ...Options) ([]string, error) {
 	if rows.curRow > rows.seekRow {
 		return nil, nil
 	}
+	// Pre-allocate cells slice based on learned column count
 	var rowIterator rowXMLIterator
+	if rows.numCols > 0 {
+		rowIterator.cells = make([]string, 0, rows.numCols)
+	}
 	var token xml.Token
 	rows.rawCellValue = rows.f.getOptions(opts...).RawCellValue
-	if rows.sst, rowIterator.err = rows.f.sharedStringsReader(); rowIterator.err != nil {
-		return rowIterator.cells, rowIterator.err
+	// Fast path: skip sharedStringsReader if FastReadMode already loaded SST
+	if !rows.f.fastSSTLoaded {
+		if rows.sst, rowIterator.err = rows.f.sharedStringsReader(); rowIterator.err != nil {
+			return rowIterator.cells, rowIterator.err
+		}
 	}
 	for {
 		if rows.token != nil {
@@ -181,6 +192,10 @@ func (rows *Rows) Columns(opts ...Options) ([]string, error) {
 				rows.seekRowOpts = extractRowOpts(xmlElement.Attr)
 				if rows.curRow > rows.seekRow {
 					rows.token = nil
+					// Learn column count for next row's pre-allocation
+					if rows.numCols == 0 && len(rowIterator.cells) > 0 {
+						rows.numCols = len(rowIterator.cells)
+					}
 					return rowIterator.cells, rowIterator.err
 				}
 			}
@@ -191,6 +206,9 @@ func (rows *Rows) Columns(opts ...Options) ([]string, error) {
 			rows.token = nil
 		case xml.EndElement:
 			if xmlElement.Name.Local == "sheetData" {
+				if rows.numCols == 0 && len(rowIterator.cells) > 0 {
+					rows.numCols = len(rowIterator.cells)
+				}
 				return rowIterator.cells, rowIterator.err
 			}
 		}
@@ -250,15 +268,20 @@ type rowXMLIterator struct {
 func (rows *Rows) rowXMLHandler(rowIterator *rowXMLIterator, xmlElement *xml.StartElement, raw bool) {
 	if rowIterator.inElement == "c" {
 		rowIterator.cellCol++
-		colCell := xlsxC{}
-		_ = colCell.cellXMLHandler(rows.decoder, xmlElement)
-		if colCell.R != "" {
-			if rowIterator.cellCol, _, rowIterator.err = CellNameToCoordinates(colCell.R); rowIterator.err != nil {
+		// Reuse cell buffer to avoid per-cell allocation
+		cell := &rows.cellBuf
+		cell.reset()
+		_ = cell.cellXMLHandler(rows.decoder, xmlElement)
+		if cell.R != "" {
+			// Use fast inline column parser when FastReadMode is enabled
+			if rows.f.fastSSTLoaded {
+				rowIterator.cellCol = colRefToIndex(cell.R)
+			} else if rowIterator.cellCol, _, rowIterator.err = CellNameToCoordinates(cell.R); rowIterator.err != nil {
 				return
 			}
 		}
 		blank := rowIterator.cellCol - len(rowIterator.cells)
-		if val, _ := colCell.getValueFrom(rows.f, rows.sst, raw); val != "" || colCell.F != nil {
+		if val, _ := cell.getValueFrom(rows.f, rows.sst, raw); val != "" || cell.F != nil {
 			rowIterator.cells = append(appendSpace(blank, rowIterator.cells), val)
 		}
 	}
