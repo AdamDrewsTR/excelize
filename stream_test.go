@@ -705,3 +705,57 @@ func TestNewStreamWriterOptions(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Equal(t, 1024, sw3.rawData.flushSize)
 }
+
+func TestBufferedWriterWriteAtFlushError(t *testing.T) {
+	// Test WriteAt temp file path where Flush fails (line 901)
+	bw := &bufferedWriter{flushSize: 1, bioSize: 4096}
+	bw.WriteString("AAABBBCCC")
+	_ = bw.Sync()
+	// Write more data so bio has unflushed content
+	bw.bio.WriteString("extra")
+	// Close the temp file to cause Flush (bio.Flush) to fail
+	bw.tmp.Close()
+	err := bw.WriteAt([]byte("YYY"), 3)
+	assert.Error(t, err)
+}
+
+func TestBufferedWriterCopyToFlushError(t *testing.T) {
+	// Test CopyTo temp file path where Flush fails (line 915)
+	bw := &bufferedWriter{flushSize: 1, bioSize: 4096}
+	bw.WriteString("test data")
+	_ = bw.Sync()
+	bw.WriteString(" more")
+	// Close file to cause Flush to fail
+	bw.tmp.Close()
+	var dst bytes.Buffer
+	_, err := bw.CopyTo(&dst)
+	assert.Error(t, err)
+}
+
+func TestBufferedWriterCopyToSeekError(t *testing.T) {
+	// Test CopyTo temp file path where Seek fails (line 918)
+	bw := &bufferedWriter{flushSize: 1, bioSize: 4096}
+	bw.WriteString("test data")
+	_ = bw.Sync()
+	// Close file so Flush succeeds (bio is nil after sync with no writes) but Seek fails
+	// We need bio to be nil so Flush() is a no-op, then Seek will fail on closed file
+	bw.bio = nil
+	bw.tmp.Close()
+	var dst bytes.Buffer
+	_, err := bw.CopyTo(&dst)
+	assert.Error(t, err)
+}
+
+func TestBufferedWriterSyncWriteToError(t *testing.T) {
+	// Test Sync where buf.WriteTo(tmp) fails (line 970)
+	bw := &bufferedWriter{flushSize: 1, bioSize: 4096}
+	bw.WriteString("initial")
+	// Sync to create temp file
+	_ = bw.Sync()
+	// Now reset state to have data in buf and tmp exists but is closed
+	bw.bio = nil
+	bw.buf.WriteString("more data")
+	bw.tmp.Close()
+	err := bw.Sync()
+	assert.Error(t, err)
+}
