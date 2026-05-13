@@ -760,3 +760,64 @@ func TestBufferedWriterSyncWriteToError(t *testing.T) {
 	err := bw.Sync()
 	assert.Error(t, err)
 }
+
+func TestStreamWriteNumericCell(t *testing.T) {
+	file := NewFile()
+	defer func() {
+		assert.NoError(t, file.Close())
+	}()
+	sw, err := file.NewStreamWriter("Sheet1")
+	assert.NoError(t, err)
+	// Exercise every type case in writeNumericCell via SetRow
+	assert.NoError(t, sw.SetRow("A1", []interface{}{
+		int8(1),
+		int16(2),
+		int32(3),
+		int64(4),
+		uint(5),
+		uint8(6),
+		uint16(7),
+		uint32(8),
+		uint64(9),
+		float32(1.5),
+		float64(2.5),
+		true,
+		false,
+	}))
+	assert.NoError(t, sw.Flush())
+}
+
+func TestStreamWriteEscapedAllChars(t *testing.T) {
+	file := NewFile()
+	defer func() {
+		assert.NoError(t, file.Close())
+	}()
+	sw, err := file.NewStreamWriter("Sheet1")
+	assert.NoError(t, err)
+	// Exercise all 5 escape sequences in writeEscaped including " and \r
+	assert.NoError(t, sw.SetRow("A1", []interface{}{
+		"has <angle> brackets",
+		"has & ampersand",
+		"has \"quotes\" inside",
+		"has \r carriage return",
+		"mixed <>&\"\r all",
+	}))
+	assert.NoError(t, sw.Flush())
+}
+
+func TestBufferedWriterWriteViaBio(t *testing.T) {
+	// Exercise the bufferedWriter.Write path when bio != nil
+	bw := &bufferedWriter{
+		flushSize: 1, // force immediate temp file creation
+		bioSize:   4096,
+	}
+	// Write enough to trigger Sync (creating temp file + bio)
+	_, _ = bw.WriteString("initial data")
+	_ = bw.Sync()
+	assert.NotNil(t, bw.bio)
+	// Now Write goes through bio path
+	n, err := bw.Write([]byte("via bio"))
+	assert.NoError(t, err)
+	assert.Equal(t, 7, n)
+	assert.NoError(t, bw.Close())
+}

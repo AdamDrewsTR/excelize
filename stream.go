@@ -440,11 +440,7 @@ func (sw *StreamWriter) SetRow(cell string, values []interface{}, opts ...RowOpt
 		style := sw.streamCellStyle(colIdx, options.StyleID)
 		// Fast path: write numeric cells directly to the buffer without
 		// going through xlsxC.V, eliminating per-cell string allocations.
-		if wrote, err := sw.writeNumericCell(val, colName, rowStr, style); wrote {
-			if err != nil {
-				_, _ = sw.rawData.WriteString(`</row>`)
-				return err
-			}
+		if sw.writeNumericCell(val, colName, rowStr, style) {
 			continue
 		}
 		// Fast path for plain strings and []byte: write inline string XML
@@ -668,7 +664,7 @@ func writeEscaped(buf *bufferedWriter, s string) {
 // float, bool) directly to the buffer, bypassing xlsxC and eliminating all
 // per-cell heap allocations. Returns (true, nil) if handled, (false, nil) if
 // the value type needs the slow path.
-func (sw *StreamWriter) writeNumericCell(val interface{}, colName, rowStr string, style int) (bool, error) {
+func (sw *StreamWriter) writeNumericCell(val interface{}, colName, rowStr string, style int) bool {
 	buf := &sw.rawData
 	switch v := val.(type) {
 	case int:
@@ -739,9 +735,9 @@ func (sw *StreamWriter) writeNumericCell(val interface{}, colName, rowStr string
 			_, _ = buf.WriteString(` t="b"><v>0</v></c>`)
 		}
 	default:
-		return false, nil
+		return false
 	}
-	return true, nil
+	return true
 }
 
 // writeStringCell writes a complete inline-string cell element directly to the
