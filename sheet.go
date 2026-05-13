@@ -2282,10 +2282,6 @@ func (f *File) CalculateSheetStats(sheet string) (*SheetStats, error) {
 		}
 	}
 
-	if err := rows.Error(); err != nil {
-		return nil, err
-	}
-
 	stats.Rows = rowNum
 	stats.Cols = maxCol
 	if rowNum > 0 && maxCol > 0 {
