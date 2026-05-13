@@ -826,11 +826,7 @@ func (sw *StreamWriter) updateDimension() error {
 	} else {
 		dim = `<dimension ref="A1"/>`
 	}
-	// Pad to match placeholder length
 	padded := dim + strings.Repeat(" ", len(dimensionPlaceholder)-len(dim))
-	if len(padded) != len(dimensionPlaceholder) {
-		return fmt.Errorf("dimension length mismatch: got %d, expected %d", len(dim), len(dimensionPlaceholder))
-	}
 	return sw.rawData.WriteAt([]byte(padded), sw.dimensionOffset)
 }
 

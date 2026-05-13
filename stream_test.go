@@ -806,3 +806,18 @@ func TestGetSheetStatsEmpty(t *testing.T) {
 	assert.Equal(t, int64(0), stats.Cells)
 	assert.Equal(t, "", stats.MaxCell)
 }
+
+func TestStreamWriterDimensionOverflow(t *testing.T) {
+	f := NewFile()
+	defer f.Close()
+
+	sw, err := f.NewStreamWriter("Sheet1")
+	assert.NoError(t, err)
+	assert.NoError(t, sw.SetRow("A1", []interface{}{"test"}))
+
+	// Force an invalid dimensionOffset so WriteAt inside updateDimension fails
+	sw.dimensionOffset = 999999999
+
+	err = sw.Flush()
+	assert.Error(t, err)
+}
