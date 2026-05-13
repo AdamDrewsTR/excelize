@@ -39,6 +39,7 @@ type StreamWriter struct {
 	rawData         bufferedWriter
 	rows            int
 	maxCol          int   // track max column for dimension element
+	cellCount       int64 // track total cells written
 	dimensionOffset int64 // byte offset of dimension placeholder for update
 	mergeCellsCount int
 	mergeCells      strings.Builder
@@ -461,6 +462,7 @@ func (sw *StreamWriter) SetRow(cell string, values []interface{}, opts ...RowOpt
 			return err
 		}
 		writeCell(&sw.rawData, c)
+		sw.cellCount++
 	}
 	_, _ = sw.rawData.WriteString(`</row>`)
 	return sw.rawData.Sync()
@@ -802,6 +804,9 @@ func (sw *StreamWriter) Flush() error {
 		return err
 	}
 
+	// Store sheet statistics for metadata access
+	sw.storeSheetStats()
+
 	sheetPath := sw.file.sheetMap[sw.Sheet]
 	sw.file.Sheet.Delete(sheetPath)
 	sw.file.checked.Delete(sheetPath)
@@ -827,6 +832,32 @@ func (sw *StreamWriter) updateDimension() error {
 		return fmt.Errorf("dimension length mismatch: got %d, expected %d", len(dim), len(dimensionPlaceholder))
 	}
 	return sw.rawData.WriteAt([]byte(padded), sw.dimensionOffset)
+}
+
+// storeSheetStats saves the sheet statistics to the File for later access.
+func (sw *StreamWriter) storeSheetStats() {
+	if sw.file.sheetStats == nil {
+		sw.file.sheetStats = make(map[string]*SheetStats)
+	}
+	maxCell := ""
+	if sw.maxCol > 0 && sw.rows > 0 {
+		maxCell, _ = CoordinatesToCellName(sw.maxCol, sw.rows)
+	}
+	sw.file.sheetStats[sw.Sheet] = &SheetStats{
+		Rows:    sw.rows,
+		Cols:    sw.maxCol,
+		Cells:   sw.cellCount,
+		MaxCell: maxCell,
+	}
+}
+
+// GetSheetStats returns previously cached sheet statistics, or nil if stats
+// have not been calculated for the given sheet.
+func (f *File) GetSheetStats(sheet string) *SheetStats {
+	if f.sheetStats == nil {
+		return nil
+	}
+	return f.sheetStats[sheet]
 }
 
 // bulkAppendFields bulk-appends fields in a worksheet by specified field

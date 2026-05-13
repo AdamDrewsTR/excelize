@@ -759,3 +759,50 @@ func TestBufferedWriterSyncWriteToError(t *testing.T) {
 	err := bw.Sync()
 	assert.Error(t, err)
 }
+
+func TestStoreSheetStats(t *testing.T) {
+	f := NewFile()
+	defer f.Close()
+
+	// Before streaming, GetSheetStats returns nil
+	assert.Nil(t, f.GetSheetStats("Sheet1"))
+
+	sw, err := f.NewStreamWriter("Sheet1")
+	assert.NoError(t, err)
+
+	// Write some rows
+	assert.NoError(t, sw.SetRow("A1", []interface{}{"Name", "Age", "City"}))
+	assert.NoError(t, sw.SetRow("A2", []interface{}{"Alice", 30, "NYC"}))
+	assert.NoError(t, sw.SetRow("A3", []interface{}{"Bob", nil, "LA"}))
+
+	assert.NoError(t, sw.Flush())
+
+	// After Flush, GetSheetStats returns populated stats
+	stats := f.GetSheetStats("Sheet1")
+	assert.NotNil(t, stats)
+	assert.Equal(t, 3, stats.Rows)
+	assert.Equal(t, 3, stats.Cols)
+	assert.Equal(t, int64(8), stats.Cells) // 3+3+2 = 8 non-nil values
+	assert.Equal(t, "C3", stats.MaxCell)
+
+	// Non-existent sheet returns nil
+	assert.Nil(t, f.GetSheetStats("NonExistent"))
+}
+
+func TestGetSheetStatsEmpty(t *testing.T) {
+	f := NewFile()
+	defer f.Close()
+
+	sw, err := f.NewStreamWriter("Sheet1")
+	assert.NoError(t, err)
+
+	// Flush with no rows written
+	assert.NoError(t, sw.Flush())
+
+	stats := f.GetSheetStats("Sheet1")
+	assert.NotNil(t, stats)
+	assert.Equal(t, 0, stats.Rows)
+	assert.Equal(t, 0, stats.Cols)
+	assert.Equal(t, int64(0), stats.Cells)
+	assert.Equal(t, "", stats.MaxCell)
+}
