@@ -274,3 +274,55 @@ func TestRemoveTempFiles(t *testing.T) {
 		assert.NoError(t, os.Remove(tmpName))
 	}
 }
+
+func TestCompressionOption(t *testing.T) {
+	// Test CompressionNone produces valid but larger output
+	f := NewFile()
+	f.options.Compression = CompressionNone
+	f.SetCellValue("Sheet1", "A1", "hello")
+	bufNone, err := f.WriteToBuffer()
+	assert.NoError(t, err)
+	f.Close()
+
+	// Test CompressionBestSpeed produces valid output
+	f2 := NewFile()
+	f2.options.Compression = CompressionBestSpeed
+	f2.SetCellValue("Sheet1", "A1", "hello")
+	bufFast, err := f2.WriteToBuffer()
+	assert.NoError(t, err)
+	f2.Close()
+
+	// Test CompressionDefault (baseline)
+	f3 := NewFile()
+	f3.SetCellValue("Sheet1", "A1", "hello")
+	bufDefault, err := f3.WriteToBuffer()
+	assert.NoError(t, err)
+	f3.Close()
+
+	// Uncompressed should be larger than default
+	assert.Greater(t, bufNone.Len(), bufDefault.Len())
+	// BestSpeed should be between the two (or equal to default for small files)
+	assert.LessOrEqual(t, bufFast.Len(), bufNone.Len())
+
+	// Verify all outputs are valid ZIP files that can be reopened
+	for _, buf := range []*bytes.Buffer{bufNone, bufFast, bufDefault} {
+		f4, err := OpenReader(buf)
+		assert.NoError(t, err)
+		val, err := f4.GetCellValue("Sheet1", "A1")
+		assert.NoError(t, err)
+		assert.Equal(t, "hello", val)
+		f4.Close()
+	}
+}
+
+func TestConfigureZipCompressionCustomWriter(t *testing.T) {
+	// configureZipCompression is a no-op for non-*zip.Writer implementations
+	f := NewFile()
+	defer f.Close()
+	f.options.Compression = CompressionNone
+	// Directly call configureZipCompression with a non-*zip.Writer
+	f.configureZipCompression(&errZipWriter{})
+	// Also test unknown compression value
+	f.options.Compression = Compression(99)
+	f.configureZipCompression(zip.NewWriter(io.Discard))
+}

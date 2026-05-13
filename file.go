@@ -140,6 +140,7 @@ func (f *File) WriteTo(w io.Writer, opts ...Options) (int64, error) {
 	cw := &countWriter{w: w}
 	f.zip64Entries = nil
 	zw := f.ZipWriter(cw)
+	f.configureZipCompression(zw)
 	if err := f.writeToZip(zw); err != nil {
 		_ = zw.Close()
 		return cw.n, err
@@ -166,6 +167,7 @@ func (f *File) writeToWithEncryption(w io.Writer) (int64, error) {
 
 	f.zip64Entries = nil
 	zw := f.ZipWriter(tmpFile)
+	f.configureZipCompression(zw)
 	if err := f.writeToZip(zw); err != nil {
 		_ = zw.Close()
 		return 0, err
@@ -216,6 +218,7 @@ func (f *File) WriteToBuffer() (*bytes.Buffer, error) {
 	buf := new(bytes.Buffer)
 	f.zip64Entries = nil
 	zw := f.ZipWriter(buf)
+	f.configureZipCompression(zw)
 
 	if err := f.writeToZip(zw); err != nil {
 		_ = zw.Close()
