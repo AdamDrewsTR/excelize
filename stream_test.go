@@ -821,3 +821,74 @@ func TestBufferedWriterWriteViaBio(t *testing.T) {
 	assert.Equal(t, 7, n)
 	assert.NoError(t, bw.Close())
 }
+
+func TestWriteCellInlineStringWithSpace(t *testing.T) {
+	// Exercise the c.IS.T.Space.Value branch in writeCell
+	var buf bufferedWriter
+	c := &xlsxC{
+		IS: &xlsxSI{
+			T: &xlsxT{
+				Space: xml.Attr{Name: xml.Name{Local: "space"}, Value: "preserve"},
+				Val:   "hello world",
+			},
+		},
+	}
+	writeCell(&buf, c, "A", "1")
+	assert.Contains(t, buf.buf.String(), `xml:space="preserve"`)
+	assert.Contains(t, buf.buf.String(), "hello world")
+}
+
+func TestBufferedWriterReaderFlushError(t *testing.T) {
+	// Exercise the Reader() flush error path when tmp is set but closed
+	bw := &bufferedWriter{flushSize: 1, bioSize: 4096}
+	_, _ = bw.WriteString("data")
+	_ = bw.Sync()
+	assert.NotNil(t, bw.tmp)
+	// Write more data so bio has unflushed bytes
+	_, _ = bw.WriteString("more data after sync")
+	// Close the temp file so Flush (via bio.Flush → Write) will fail
+	bw.tmp.Close()
+	_, err := bw.Reader()
+	assert.Error(t, err)
+}
+
+func TestBufferedWriterSyncCreateTempError(t *testing.T) {
+	// Exercise the Sync() CreateTemp error path (returns nil)
+	bw := &bufferedWriter{
+		flushSize: 1,
+		bioSize:   4096,
+		tmpDir:    "/nonexistent/path/for/temp/files",
+	}
+	_, _ = bw.WriteString("enough data to trigger sync")
+	err := bw.Sync()
+	assert.NoError(t, err) // error is swallowed, falls back to in-memory
+	assert.Nil(t, bw.tmp)
+}
+
+func TestGetRowValuesXMLError(t *testing.T) {
+	// Exercise the getRowValues XML decode error path
+	f := NewFile()
+	defer f.Close()
+	sw, err := f.NewStreamWriter("Sheet1")
+	assert.NoError(t, err)
+	// Write invalid XML into the buffer so the decoder returns an error
+	_, _ = sw.rawData.WriteString("<sheetData><row r=\"1\"><c><v>ok</v></c></row>")
+	_, _ = sw.rawData.WriteString("<unclosed")
+	_, err = sw.getRowValues(1, 1, 1)
+	assert.Error(t, err)
+}
+
+func TestGetRowValuesEOF(t *testing.T) {
+	// Exercise the io.EOF return path in getRowValues by providing valid
+	// XML that closes cleanly without the target row present.
+	f := NewFile()
+	defer f.Close()
+	sw := &StreamWriter{
+		file:    f,
+		rawData: bufferedWriter{},
+	}
+	sw.rawData.buf.WriteString("<worksheet></worksheet>")
+	res, err := sw.getRowValues(99, 1, 1)
+	assert.NoError(t, err)
+	assert.Equal(t, []string{""}, res)
+}
