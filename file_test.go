@@ -755,3 +755,37 @@ func (s *sliceWriterAt) WriteAt(p []byte, off int64) (int, error) {
 	copy(s.buf[off:], p)
 	return len(p), nil
 }
+
+func TestWriteToBufferErrors(t *testing.T) {
+	// writeToZip error path
+	f := NewFile()
+	f.SetZipWriter(func(w io.Writer) ZipWriter {
+		return &errZipWriter{
+			createFunc: func(string) (io.Writer, error) {
+				return nil, errors.New("create error")
+			},
+		}
+	})
+	_, err := f.WriteToBuffer()
+	assert.Error(t, err)
+	assert.NoError(t, f.Close())
+
+	// zw.Close error path
+	f = NewFile()
+	f.SetZipWriter(func(w io.Writer) ZipWriter {
+		return &errZipWriter{closeErr: errors.New("close error")}
+	})
+	_, err = f.WriteToBuffer()
+	assert.EqualError(t, err, "close error")
+	assert.NoError(t, f.Close())
+}
+
+func TestWriteToBufferWithPassword(t *testing.T) {
+	// Exercise the encryption path in WriteToBuffer
+	f := NewFile(Options{Password: "pass"})
+	assert.NoError(t, f.SetCellValue("Sheet1", "A1", "secret"))
+	buf, err := f.WriteToBuffer()
+	assert.NoError(t, err)
+	assert.Greater(t, buf.Len(), 0)
+	assert.NoError(t, f.Close())
+}

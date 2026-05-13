@@ -759,3 +759,54 @@ func TestBufferedWriterSyncWriteToError(t *testing.T) {
 	err := bw.Sync()
 	assert.Error(t, err)
 }
+
+func TestWriteCellInlineStringWithSpace(t *testing.T) {
+	var buf bufferedWriter
+	c := &xlsxC{
+		IS: &xlsxSI{
+			T: &xlsxT{
+				Space: xml.Attr{Name: xml.Name{Local: "space"}, Value: "preserve"},
+				Val:   "hello world",
+			},
+		},
+	}
+	writeCell(&buf, *c)
+	assert.Contains(t, buf.buf.String(), `xml:space="preserve"`)
+	assert.Contains(t, buf.buf.String(), "hello world")
+}
+
+func TestBufferedWriterReaderFlushError(t *testing.T) {
+	bw := &bufferedWriter{flushSize: 1, bioSize: 4096}
+	_, _ = bw.WriteString("data")
+	_ = bw.Sync()
+	assert.NotNil(t, bw.tmp)
+	_, _ = bw.WriteString("more data after sync")
+	bw.tmp.Close()
+	_, err := bw.Reader()
+	assert.Error(t, err)
+}
+
+func TestBufferedWriterSyncCreateTempError(t *testing.T) {
+	bw := &bufferedWriter{
+		flushSize: 1,
+		bioSize:   4096,
+		tmpDir:    "/nonexistent/path/for/temp/files",
+	}
+	_, _ = bw.WriteString("enough data to trigger sync")
+	err := bw.Sync()
+	assert.NoError(t, err)
+	assert.Nil(t, bw.tmp)
+}
+
+func TestGetRowValuesEOF(t *testing.T) {
+	f := NewFile()
+	defer f.Close()
+	sw := &StreamWriter{
+		file:    f,
+		rawData: bufferedWriter{},
+	}
+	sw.rawData.buf.WriteString("<worksheet></worksheet>")
+	res, err := sw.getRowValues(99, 1, 1)
+	assert.NoError(t, err)
+	assert.Equal(t, []string{""}, res)
+}
