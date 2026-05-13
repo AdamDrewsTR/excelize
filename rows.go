@@ -399,12 +399,6 @@ func (f *File) Rows(sheet string) (*Rows, error) {
 			return nil, err
 		}
 	}
-	// In FastReadMode, preload shared strings to avoid per-cell disk I/O
-	if f.options != nil && f.options.FastReadMode && !f.fastSSTLoaded {
-		if err := f.preloadSharedStrings(); err != nil {
-			return nil, err
-		}
-	}
 	var err error
 	rows := Rows{f: f, sheet: name}
 	rows.needClose, rows.decoder, rows.tempFile, err = f.xmlDecoder(name)
